@@ -1,0 +1,47 @@
+{
+    /// Specify any name for the experiment. Logs and data will be stored under /experiment_data/<your_experiment_name>
+    experiment: "<your_experiment_name>",
+
+    /// Docker image used to run the zenohd instance
+    docker_image: {
+        tag: "<your_zenohd_docker_image>:<tag>",
+        /// Set to true to pull a fresh copy of the Docker image
+        clean_first: true
+    },
+
+    /// Username for SSH access to remote hosts
+    user_name: "<your_ssh_username>",
+
+    routers: {
+        /// Router identifiers (e.g., "1", "2", "3"). Corresponding logs will be named zenohd_1.log, zenohd_2.log, etc.
+        "1": {
+            /// Remote host address. Use 'localhost' if the router is running on the same host as this script
+            ssh: "<host_ip_or_hostname>",
+
+            /// Run zenohd inside a Docker container.
+            /// If not using Docker, ensure zenohd is built on the host and can be executed directly using the `zenohd` command.
+            docker: true,
+
+            /// Zenoh runtime identifier (unsigned 128-bit integer in lowercase hexadecimal)
+            /// If "set" is false, a random unique identifier will be generated
+            zid: {
+                set: true,
+                value: "<unique_hexadecimal_id>"
+            },
+
+            /// Mode configuration:
+            /// "l" = listen (leave connect list empty)
+            /// "e" = connect (must specify router IDs in the 'connect' list)
+            mode: "l",
+
+            /// Listening endpoint for incoming requests
+            /// Format: "<proto>/<address>:<port>"
+            /// NOTE: The zenohd inside Docker always listens on port 7447.
+            /// This config maps Docker's internal port 7447 to the specified host port.
+            listen_endpoint: "<proto>/<address>:<port>",
+
+            /// List of router IDs to connect to (e.g., [2, 3]). Leave empty when in listen mode.
+            connect: []
+        }
+    }
+}

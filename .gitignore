@@ -1,0 +1,21 @@
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+
+# User-specific configuration
+NETWORK_CONFIG.json5
+
+# Logs
+*.log
+
+# Ignore all experiment data except the .gitignore placeholder
+experiment_data/*
+!experiment_data/.gitignore
+
+# OS metadata files
+.DS_Store
+Thumbs.db
