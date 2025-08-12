@@ -13,19 +13,9 @@
     /// Example: "/home/user/zenoh/target/release/zenohd"
     // volume: "<host_zenohd_path>",
 
-    /// Username for SSH access to remote hosts
-    user_name: "<your_ssh_username>",
-
     routers: {
-        /// Router identifiers (e.g., "1", "2", "3"). Corresponding logs will be named zenohd_1.log, zenohd_2.log, etc.
+        /// Router identifiers (e.g., "1", "2", "3"). Corresponding logs will be zenohd_1.log, zenohd_2.log, ...
         "1": {
-            /// Remote host address. Use 'localhost' if the router is running on the same host as this script
-            ssh: "<host_ip_or_hostname>",
-
-            /// Run zenohd inside a Docker container.
-            /// If not using Docker, ensure zenohd is built on the host and can be executed directly using the `zenohd` command.
-            docker: true,
-
             /// (Optional) Path to the host zenohd binary, mounted into the container at /zenohd.
             /// Overrides the global volume setting if present.
             // volume: "<host_zenohd_path>",
@@ -36,20 +26,20 @@
                 set: true,
                 value: "<unique_hexadecimal_id>"
             },
-
-            /// Mode configuration:
-            /// "l" = listen (leave connect list empty)
-            /// "e" = connect (must specify router IDs in the 'connect' list)
-            mode: "l",
-
-            /// Listening endpoint for incoming requests
-            /// Format: "<proto>/<address>:<port>"
-            /// NOTE: The zenohd inside Docker always listens on port 7447.
-            /// This config maps Docker's internal port 7447 to the specified host port.
-            listen_endpoint: "<proto>/<address>:<port>",
-
-            /// List of router IDs to connect to (e.g., [2, 3]). Leave empty when in listen mode.
-            connect: []
-        }
-    }
+            /// Multiple listening endpoints allowed
+            /// Format per item: "<proto>/<address>:<port>"
+            /// NOTE: zenohd in Docker listens on 7447 internally.
+            /// For each host port below, ensure it's mapped to container 7447.
+            listen_endpoints: [
+                "<proto>/<addressA>:<portA>",
+                // ... add more as needed
+            ],
+        },
+    },
+    /// (Optional) Link map when you have multiple interfaces.
+    /// a_idx / b_idx are indices into each router's listen_endpoints array.
+    links: [
+        { a: "1", a_idx: <index_on_router1>, b: "2", b_idx: <index_on_router2> },
+        // ... add more as needed
+    ]
 }

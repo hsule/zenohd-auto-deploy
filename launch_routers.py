@@ -4,9 +4,10 @@ import os
 import sys
 import subprocess
 import json5
+import time
+from datetime import datetime
 
-
-def signal_handler(sig, frame):
+def signal_handler(sig):
     print(f"\nReceived signal:{sig}, leaving...\n")
     
     if router_list:
@@ -14,11 +15,8 @@ def signal_handler(sig, frame):
         # os.chdir("experiment_data")
         for router in router_list:
             try:
-                if not router.is_localhost:
-                    router.transfer_data_back()
-                router.kill_session()
+                router.cleanup()
                 print(f"Successfully killed tmux session for Router {router.id}\n")
-                router.check_if_error_while_launch()
             except Exception as e:
                 # print(f"Failed to kill tmux session for Router {router.id}: {e}\n")
                 print(f"An error occurred while performing the cleanup for Router {router.id}: {e}\n")
@@ -33,101 +31,126 @@ class Router():
         self.id = id
         self.config = config
 
-        self.launch_ip = config.get('ssh')
-        self.docker = config.get('docker')
-        self.mode = config.get('mode')
         if config.get('zid').get('set'):
             self.zid = config.get('zid').get('value')
         else:
             self.zid = False
-        self.listen_endpoint = config.get('listen_endpoint')
-        self.is_localhost = "localhost" in self.launch_ip
-        self.listen_port = self.listen_endpoint.split("/")[-1].split(":")[-1]
-        self.session_name = f"zenohd_{self.listen_port}"
+        self.listen_endpoints = config.get('listen_endpoints') 
+        self.container_name = f"zenohd_{self.id}"
         self.volume = self.config.get('volume') or network_config.get('volume')
-
+        
+        self.cleanup()
+        
+        self.run_docker()
+        time.sleep(1) 
+        
+        self.setup_network_interfaces()
         self.launch_zenohd()
+    
+    def launch_zenohd(self):
+        print(f"Lauching zenohd {self.container_name}")
+        
+        launch_cmd = f"docker exec -it {self.container_name} ./zenohd"
+        if self.zid:
+            launch_cmd += f" -i {self.zid}"
+        for ep in self.listen_endpoints:
+            launch_cmd += f" -l {ep}"
+        
+        rid = str(self.id)     
+        peer_eps = []
+        for link in links:
+            if link.get("a") == rid:
+                eps = routers[link["b"]]["listen_endpoints"]
+                idx = link["b_idx"]
+                peer_eps.append(eps[idx])
+            elif link.get("b") == rid:
+                eps = routers[link["a"]]["listen_endpoints"]
+                idx = link["a_idx"]
+                peer_eps.append(eps[idx])
+
+        for ep in peer_eps:
+            launch_cmd += f" -e {ep}"
+            
+        launch_cmd += f" > >(tee ./{self.container_name}.log) 2> >(tee ./{self.container_name}_err.log >&2)"
+        tmux_cmd = f"tmux send-keys -t {self.container_name} '{launch_cmd}' C-m"
+        
+        self.run_shell_command(tmux_cmd)
+        
+        
+    def setup_netns_veth(self, tid, addr):
+        name = f"{self.id}_{tid}"
+        
+        self.run_shell_command(f"sudo ip tuntap add tap_{name} mode tap")
+        self.run_shell_command(f"sudo ip link set tap_{name} promisc on up")
+        
+        self.run_shell_command(f"sudo ip link add name br_{name} type bridge")
+        self.run_shell_command(f"sudo ip link set br_{name} up")       
+        self.run_shell_command(f"sudo ip link set tap_{name} master br_{name}")
+        
+        self.run_shell_command(f"sudo iptables -I FORWARD -m physdev --physdev-is-bridged -i br_{name}  -j ACCEPT")
+
+        pid = subprocess.check_output(f"docker inspect --format '{{{{ .State.Pid }}}}' {self.container_name}", shell=True).decode().strip()
+        
+        self.run_shell_command("sudo mkdir -p /var/run/netns")
+        self.run_shell_command(f"sudo ln -sf /proc/{pid}/ns/net  /var/run/netns/{pid}") 
+              
+        self.run_shell_command(f"sudo ip link add internal_{name}  type veth peer name external_{name}")       
+        self.run_shell_command(f"sudo ip link set internal_{name}  master br_{name}")       
+        self.run_shell_command(f"sudo ip link set internal_{name}  up")       
+        self.run_shell_command(f"sudo ip link set external_{name}  netns {pid}")       
+
+        self.run_shell_command(f"sudo ip netns exec {pid}  ip link set dev external_{name} name eth{tid}")       
+        self.run_shell_command(f"sudo ip netns exec {pid}  ip link set eth{tid} up")       
+        self.run_shell_command(f"sudo ip netns exec {pid}  ip addr add {addr}/24 dev eth{tid}") 
+        
+    def setup_network_interfaces(self):
+        for idx, ep in enumerate(self.listen_endpoints):
+            addr = ep.split('/')[1].split(':')[0]  # e.g. 10.0.1.1
+            self.setup_netns_veth(idx, addr)
+
 
     def run_shell_command(self, command):
         print(f"Running command: {command}\n")
         subprocess.run(command, shell=True, check=True)
 
-    def kill_session(self):
-        kill_session_command = f"tmux kill-session -t {self.session_name}"
-        if self.is_localhost:
-            command = kill_session_command
-        else:
-            command = f"ssh {user_name}@{self.launch_ip} \"{kill_session_command}\""
-        self.run_shell_command(command)
+    def cleanup_netns_veth(self, tid):
+        name = f"{self.id}_{tid}"
+        
+        self.run_shell_command(f"sudo iptables -D FORWARD -m physdev --physdev-is-bridged -i br_{name} -j ACCEPT 2>/dev/null || true")
+        
+        self.run_shell_command(f"sudo ip link del br_{name} 2>/dev/null || true")
+        self.run_shell_command(f"sudo ip link del tap_{name} 2>/dev/null || true")
+        self.run_shell_command(f"sudo ip link del internal_{name} 2>/dev/null || true")
+        self.run_shell_command(f"sudo ip link del external_{name} 2>/dev/null || true")
+        
+    def cleanup(self):
+        print(f"Cleaning up for Router {self.id}...\n")
+        
+        for idx in range(len(self.listen_endpoints)):
+            self.cleanup_netns_veth(idx)
+        self.run_shell_command("sudo rm -f /var/run/netns/* 2>/dev/null || true")
+        self.run_shell_command(f"docker container rm -f {self.container_name} 2>/dev/null || true")
+        self.run_shell_command(f"tmux kill-session -t {self.container_name} 2>/dev/null || true")
 
-    def transfer_data_back(self):
-        command = f"rsync -avP {user_name}@{self.launch_ip}:~/{base_dir} ./experiment_data"
-        self.run_shell_command(command)
-
-    def launch_zenohd(self):
-        print(f"Launching zenohd for Router {self.id}...\n")
-
-        kill_session_command = f"tmux kill-session -t {self.session_name} 2>/dev/null || true && "
+    def run_docker(self):
+        print(f"Running docker {self.id}...\n")
+        
         chdir_command = f"mkdir -p {base_dir} && cd {base_dir} && "
-        if self.docker:
-            volume_arg = ""
-            if self.volume:
-                host_path = os.path.abspath(self.volume)
-                volume_arg = f"-v {host_path}:/zenohd"
+        volume_arg = ""
+        if self.volume:
+            host_path = os.path.abspath(self.volume)
+            volume_arg = f"-v {host_path}:/zenohd"
 
-            docker_run_cmd = f"docker run --init -e RUST_LOG=trace --rm {volume_arg} -p {self.listen_port}:7447/tcp {image}"
-            if image_clean:
-                clean_image = f"docker rmi {image} 2>/dev/null || true && "
-                zenohd_launch = clean_image + chdir_command + docker_run_cmd
-            else:
-                zenohd_launch = chdir_command + docker_run_cmd
+        docker_run_cmd = f"docker run -dit --name {self.container_name} --network none -e RUST_LOG=trace --rm --entrypoint /bin/sh {volume_arg} {image}"
+        if image_clean:
+            clean_image = f"docker rmi {image} 2>/dev/null || true && "
+            docker_run_cmd = clean_image + chdir_command + docker_run_cmd
         else:
-            zenohd_launch = chdir_command + "zenohd"
-        
-        if self.is_localhost:
-            base_command = kill_session_command +f"tmux new-session -d -s {self.session_name} && tmux send-keys -t {self.session_name} '{zenohd_launch}"
-        else:
-            base_command = f"ssh {user_name}@{self.launch_ip} \"{kill_session_command}tmux new-session -d -s {self.session_name} && tmux send-keys -t {self.session_name} '{zenohd_launch}"
-
-        # Add mode-specific options
-        if self.zid:
-            base_command += f" -i {self.zid}"
-        if self.mode == "l":
-            base_command += f" -l tcp/0.0.0.0:{self.listen_port}"
-        elif self.mode == "e":
-            connect_points = self.config['connect']
-            for remote_id in connect_points:
-                base_command += f" -e {routers.get(str(remote_id)).get('listen_endpoint')}"
-        
-        base_command += f" > >(tee ./zenohd_{self.id}.log) 2> >(tee ./zenohd_{self.id}_err.log >&2)"
-        base_command += "; echo \$? > /tmp/exit_code' C-m"
-        if not self.is_localhost:
-            base_command += "\""
+            docker_run_cmd = chdir_command + docker_run_cmd
+        base_command = f"tmux new-session -d -s {self.container_name} && tmux send-keys -t {self.container_name} '{docker_run_cmd}"
+        base_command += "; echo $? > /tmp/exit_code' C-m"
 
         self.run_shell_command(base_command)
-    
-    def check_if_error_while_launch(self):
-        if self.is_localhost:
-            command = "cat /tmp/exit_code"
-            clean = "rm /tmp/exit_code"
-        else:
-            command = f"ssh {user_name}@{self.launch_ip} \"cat /tmp/exit_code\""
-            clean = f"ssh {user_name}@{self.launch_ip} \"rm /tmp/exit_code\""
-        try:
-            result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            exit_code = result.stdout.strip()
-            if exit_code != b'0' and exit_code != b'130':
-                print(f"Error: An error occurred while launching Router {self.id} on {self.launch_ip}. Exit code: {exit_code}")
-                subprocess.run(clean, shell=True)
-                sys.exit(0)
-            else:
-                print(f"Router {self.id} launched successfully on {self.launch_ip}.")
-                subprocess.run(clean, shell=True)
-        except subprocess.CalledProcessError as _:
-            pass
-
-# class Client():
-#     def __init__
 
 
 if __name__ == "__main__":
@@ -136,30 +159,32 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, signal_handler)
 
 
+    try:
+        # Load configuration from the JSON5 file
+        with open('NETWORK_CONFIG.json5', 'r') as config_file:
+            network_config = json5.load(config_file)
+        experiment_name = network_config.get('experiment')
+        image_config = network_config.get('docker_image')
+        image = image_config.get('tag')
+        image_clean = image_config.get('clean_first')
+        user_name = network_config.get('user_name')
+        routers = network_config.get('routers', {})
+        links = network_config.get('links', [])
 
-    # Load configuration from the JSON5 file
-    with open('NETWORK_CONFIG.json5', 'r') as config_file:
-        network_config = json5.load(config_file)
-    experiment_name = network_config.get('experiment')
-    image_config = network_config.get('docker_image')
-    image = image_config.get('tag')
-    image_clean = image_config.get('clean_first')
-    user_name = network_config.get('user_name')
-    routers = network_config.get('routers', {})
-
-    base_dir = f"experiment_data/{experiment_name}"
-    # os.makedirs(base_dir, exist_ok=False)
-    # os.chdir(base_dir)
-    
-    router_list = []
-    for router_id, router_config in routers.items():
+        run_ts = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
+        base_dir = f"experiment_data/{experiment_name}/{run_ts}"
+        # os.makedirs(base_dir, exist_ok=False)
+        # os.chdir(base_dir)
         
-        router_list.append(Router(router_id, router_config))
+        router_list = []    
+        for router_id, router_config in routers.items():
+            router_list.append(Router(router_id, router_config))
+
+        print("All routers have been launched.\n")
+
+        signal.pause()
+    
+    except Exception:
         for router in router_list:
-            router.check_if_error_while_launch()
-
-    print("All routers have been launched.\n")
-
-    # client_list = []
-    # for client_id, 
-    signal.pause()
+            print("ERROR: CLEANING UP")
+            router.cleanup()
