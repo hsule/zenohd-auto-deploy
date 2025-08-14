@@ -1,0 +1,42 @@
+{
+    experiment: "test",
+
+    docker_image: {
+        tag: "eclipse/zenoh:1.4.0",
+        clean_first: false
+    },
+
+    volume: "/home/leann/repos/ns3_zenoh_simulation/zenoh/target/x86_64-unknown-linux-musl/fast/zenohd",
+    // volume: "/home/leann/repos/ns3_zenoh_simulation/zenoh",
+
+    routers: {
+        "1": {
+            zid: {set: true, value: "a10274ef26525ccdb47947a9dfdd7123"},
+            listen_endpoints: [
+                "tcp/10.0.1.1:8001", // 0
+                "tcp/10.0.2.1:8001"  // 1
+            ],
+        },
+        "2": {
+            zid: {set: true, value: "bef96187ff749ce9379ef4257d963456"},
+            listen_endpoints: [
+                "tcp/10.0.1.2:8002", // 0
+                "tcp/10.0.3.2:8002"  // 1
+            ],
+        },
+        "3": {
+            docker: true,
+            zid: {set: true, value: "c16a6fbfd2e362029d2ff8012bbe3bc1"},
+            listen_endpoints: [
+                "tcp/10.0.2.3:8003", // 0
+                "tcp/10.0.3.3:8003"  // 1
+            ],
+        }
+    },
+    links: [
+        // router, endpoint index
+        { a: "1", a_idx: 0, b: "2", b_idx: 0 },
+        { a: "1", a_idx: 1, b: "3", b_idx: 0 },
+        { a: "2", a_idx: 1, b: "3", b_idx: 1 }
+    ]
+}
