@@ -10,23 +10,23 @@ from datetime import datetime
 def signal_handler(sig):
     print(f"\nReceived signal:{sig}, leaving...\n")
     
-    if router_list:
-        # print("Cleaning up tmux sessions for all routers...\n")
+    if node_list:
+        # print("Cleaning up tmux sessions for all nodes...\n")
         # os.chdir("experiment_data")
-        for router in router_list:
+        for node in node_list:
             try:
-                router.cleanup()
-                print(f"Successfully killed tmux session for Router {router.id}\n")
+                node.cleanup()
+                print(f"Successfully killed tmux session for Node {node.id}\n")
             except Exception as e:
-                # print(f"Failed to kill tmux session for Router {router.id}: {e}\n")
-                print(f"An error occurred while performing the cleanup for Router {router.id}: {e}\n")
+                # print(f"Failed to kill tmux session for Node {node.id}: {e}\n")
+                print(f"An error occurred while performing the cleanup for Node {node.id}: {e}\n")
 
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     os.killpg(process_group_id, signal.SIGTERM)
     sys.exit(0)
 
 
-class Router():
+class Node():
     def __init__(self, id, config):
         self.id = id
         self.config = config
@@ -35,9 +35,11 @@ class Router():
             self.zid = config.get('zid').get('value')
         else:
             self.zid = False
+            
         self.listen_endpoints = config.get('listen_endpoints') 
         self.container_name = f"zenohd_{self.id}"
         self.volume = self.config.get('volume') or network_config.get('volume')
+        self.role = self.config.get('role', 'router') 
         
         self.cleanup()
         
@@ -45,14 +47,26 @@ class Router():
         time.sleep(1) 
         
         self.setup_network_interfaces()
-        self.launch_zenohd()
+        self.launch_zenoh()
     
-    def launch_zenohd(self):
-        print(f"Lauching zenohd {self.container_name}")
+    def launch_zenoh(self):
+        launch_cmd = f"docker exec -e RUST_LOG=trace -it {self.container_name} ./zenoh/target/x86_64-unknown-linux-musl/fast/"
         
-        launch_cmd = f"docker exec -it {self.container_name} ./zenohd"
-        if self.zid:
-            launch_cmd += f" -i {self.zid}"
+            
+        if self.role == "pub":
+            print(f"Launching publisher {self.container_name}")
+            launch_cmd += "examples/z_pub"
+        elif self.role == "sub":
+            print(f"Launching subscriber {self.container_name}")
+            launch_cmd += "examples/z_sub"
+        else:
+            print(f"Lauching zenohd {self.container_name}")
+            launch_cmd += "zenohd"
+        
+            
+            if self.zid:
+                launch_cmd += f" -i {self.zid}"
+                
         for ep in self.listen_endpoints:
             launch_cmd += f" -l {ep}"
         
@@ -60,17 +74,17 @@ class Router():
         peer_eps = []
         for link in links:
             if link.get("a") == rid:
-                eps = routers[link["b"]]["listen_endpoints"]
+                eps = nodes[link["b"]]["listen_endpoints"]
                 idx = link["b_idx"]
                 peer_eps.append(eps[idx])
             elif link.get("b") == rid:
-                eps = routers[link["a"]]["listen_endpoints"]
+                eps = nodes[link["a"]]["listen_endpoints"]
                 idx = link["a_idx"]
                 peer_eps.append(eps[idx])
 
         for ep in peer_eps:
             launch_cmd += f" -e {ep}"
-            
+                
         launch_cmd += f" > >(tee ./{self.container_name}.log) 2> >(tee ./{self.container_name}_err.log >&2)"
         tmux_cmd = f"tmux send-keys -t {self.container_name} '{launch_cmd}' C-m"
         
@@ -124,7 +138,7 @@ class Router():
         self.run_shell_command(f"sudo ip link del external_{name} 2>/dev/null || true")
         
     def cleanup(self):
-        print(f"Cleaning up for Router {self.id}...\n")
+        print(f"Cleaning up for Node {self.id}...\n")
         
         for idx in range(len(self.listen_endpoints)):
             self.cleanup_netns_veth(idx)
@@ -139,9 +153,9 @@ class Router():
         volume_arg = ""
         if self.volume:
             host_path = os.path.abspath(self.volume)
-            volume_arg = f"-v {host_path}:/zenohd"
+            volume_arg = f"-v {host_path}:/zenoh"
 
-        docker_run_cmd = f"docker run -dit --name {self.container_name} --network none -e RUST_LOG=trace --rm --entrypoint /bin/sh {volume_arg} {image}"
+        docker_run_cmd = f"docker run -dit --name {self.container_name} --network none --rm --entrypoint /bin/sh {volume_arg} {image}"
         if image_clean:
             clean_image = f"docker rmi {image} 2>/dev/null || true && "
             docker_run_cmd = clean_image + chdir_command + docker_run_cmd
@@ -168,7 +182,7 @@ if __name__ == "__main__":
         image = image_config.get('tag')
         image_clean = image_config.get('clean_first')
         user_name = network_config.get('user_name')
-        routers = network_config.get('routers', {})
+        nodes = network_config.get('nodes', {})
         links = network_config.get('links', [])
 
         run_ts = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
@@ -176,15 +190,15 @@ if __name__ == "__main__":
         # os.makedirs(base_dir, exist_ok=False)
         # os.chdir(base_dir)
         
-        router_list = []    
-        for router_id, router_config in routers.items():
-            router_list.append(Router(router_id, router_config))
+        node_list = []    
+        for node_id, node_config in nodes.items():
+            node_list.append(Node(node_id, node_config))
 
-        print("All routers have been launched.\n")
+        print("All nodes have been launched.\n")
 
         signal.pause()
     
     except Exception:
-        for router in router_list:
+        for node in node_list:
             print("ERROR: CLEANING UP")
-            router.cleanup()
+            node.cleanup()
