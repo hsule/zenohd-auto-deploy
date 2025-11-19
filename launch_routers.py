@@ -3,6 +3,7 @@ import signal
 import os
 import sys
 import subprocess
+import json
 import json5
 import time
 from datetime import datetime
@@ -62,25 +63,42 @@ class Node():
         else:
             print(f"Lauching zenohd {self.container_name}")
             launch_cmd += "zenohd"
-        
+            launch_cmd += " --adminspace-permissions rw"
             
             if self.zid:
                 launch_cmd += f" -i {self.zid}"
                 
         for ep in self.listen_endpoints:
             launch_cmd += f" -l {ep}"
+            
+        peer_capacities = {} # 儲存 {Target ZID: Capacity}
         
         rid = str(self.id)     
         peer_eps = []
         for link in links:
+            target_node_id = None
+            capacity = link.get("cap")
+            
             if link.get("a") == rid:
-                eps = nodes[link["b"]]["listen_endpoints"]
+                target_node_id = link["b"]
+                eps = nodes[target_node_id]["listen_endpoints"]
                 idx = link["b_idx"]
                 peer_eps.append(eps[idx])
             elif link.get("b") == rid:
-                eps = nodes[link["a"]]["listen_endpoints"]
+                target_node_id = link["a"]
+                eps = nodes[target_node_id]["listen_endpoints"]
                 idx = link["a_idx"]
                 peer_eps.append(eps[idx])
+            
+            if target_node_id is not None and capacity is not None:
+                target_node_config = nodes.get(target_node_id)
+                target_zid = target_node_config.get("zid").get("value")  
+                peer_capacities[target_zid] = int(capacity)
+                
+
+        if self.role == "router" and peer_capacities:
+            capacities_json_str = json.dumps(peer_capacities)
+            launch_cmd += f" --cfg='peer_caps:{capacities_json_str}'"
 
         for ep in peer_eps:
             launch_cmd += f" -e {ep}"
