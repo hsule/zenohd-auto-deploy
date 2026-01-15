@@ -45,7 +45,7 @@ class Node():
         self.cleanup()
         
         self.run_docker()
-        time.sleep(1) 
+        time.sleep(0.5) 
         
         self.setup_network_interfaces()
         self.launch_zenoh()
@@ -71,37 +71,39 @@ class Node():
         for ep in self.listen_endpoints:
             launch_cmd += f" -l {ep}"
             
-        peer_capacities = {} # 儲存 {Target ZID: Capacity}
-        
-        rid = str(self.id)     
-        peer_eps = []
-        for link in links:
-            target_node_id = None
-            capacity = link.get("cap")
+
+        if self.role == "router":    
+            peer_capacities = {} # 儲存 {Target ZID: Capacity}
             
-            if link.get("a") == rid:
-                target_node_id = link["b"]
-                eps = nodes[target_node_id]["listen_endpoints"]
-                idx = link["b_idx"]
-                peer_eps.append(eps[idx])
-            elif link.get("b") == rid:
-                target_node_id = link["a"]
-                eps = nodes[target_node_id]["listen_endpoints"]
-                idx = link["a_idx"]
-                peer_eps.append(eps[idx])
-            
-            if target_node_id is not None and capacity is not None:
-                target_node_config = nodes.get(target_node_id)
-                target_zid = target_node_config.get("zid").get("value")  
-                peer_capacities[target_zid] = int(capacity)
+            rid = str(self.id)     
+            peer_eps = []
+            for link in links:
+                target_node_id = None
+                capacity = link.get("cap")
                 
+                if link.get("a") == rid:
+                    target_node_id = link["b"]
+                    eps = nodes[target_node_id]["listen_endpoints"]
+                    idx = link["b_idx"]
+                    peer_eps.append(eps[idx])
+                elif link.get("b") == rid:
+                    target_node_id = link["a"]
+                    eps = nodes[target_node_id]["listen_endpoints"]
+                    idx = link["a_idx"]
+                    peer_eps.append(eps[idx])
+                
+                if target_node_id is not None and capacity is not None:
+                    target_node_config = nodes.get(target_node_id)
+                    target_zid = target_node_config.get("zid").get("value")  
+                    peer_capacities[target_zid] = int(capacity)
+                    
 
-        if self.role == "router" and peer_capacities:
-            capacities_json_str = json.dumps(peer_capacities)
-            launch_cmd += f" --cfg='peer_caps:{capacities_json_str}'"
+            if peer_capacities:
+                capacities_json_str = json.dumps(peer_capacities)
+                launch_cmd += f" --cfg='peer_caps:{capacities_json_str}'"
 
-        for ep in peer_eps:
-            launch_cmd += f" -e {ep}"
+            for ep in peer_eps:
+                launch_cmd += f" -e {ep}"
                 
         launch_cmd += f" > >(tee ./{self.container_name}.log) 2> >(tee ./{self.container_name}_err.log >&2)"
         tmux_cmd = f"tmux send-keys -t {self.container_name} '{launch_cmd}' C-m"
