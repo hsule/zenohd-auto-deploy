@@ -173,6 +173,11 @@ class Node():
         volume_arg = ""
         if self.volume:
             host_path = os.path.abspath(self.volume)
+            host_project_dir = os.environ.get('HOST_PROJECT_DIR')
+            if host_project_dir:
+                # Remap container path to host path for Docker socket mount
+                container_project_dir = os.path.abspath(os.path.join(os.getcwd(), '..'))
+                host_path = host_path.replace(container_project_dir, host_project_dir, 1)
             volume_arg = f"-v {host_path}:/zenoh"
 
         docker_run_cmd = f"docker run -dit --name {self.container_name} --network none --rm --entrypoint /bin/sh {volume_arg} {image}"
