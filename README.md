@@ -1,6 +1,6 @@
 # Zenohd Auto Deploy
 
-A submodule of [ns3_zenoh_simulation](https://github.com/hsule/ns3_zenoh_simulation).
+A submodule of [congestion_aware_routing](https://github.com/NEWSLabNTU/congestion_aware_routing).
 
 Automatically deploys Zenoh nodes (routers, publishers, subscribers) as Docker containers, with TAP/veth network interfaces for ns-3 integration.
 
@@ -21,7 +21,7 @@ On shutdown (Ctrl-C / SIGTERM), all containers, bridges, TAP interfaces, and tmu
 This script is typically invoked via the parent project:
 
 ```bash
-# From the ns3_zenoh_simulation root
+# From the congestion_aware_routing root
 ./script/run_zenoh.sh
 ```
 
